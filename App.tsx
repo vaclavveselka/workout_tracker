@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useTimer } from './hooks/useTimer';
 import { Exercise, Routine, WorkoutSession, WorkoutSet, SessionEntry } from './types';
-import { PlusIcon, ChartBarIcon, TrashIcon, PencilIcon, ChevronLeftIcon, CheckIcon, Cog6ToothIcon } from './components/Icons';
+import { PlusIcon, ChartBarIcon, TrashIcon, PencilIcon, ChevronLeftIcon, CheckIcon, Cog6ToothIcon, EllipsisVerticalIcon } from './components/Icons';
 import { Modal } from './components/Modal';
 import { ExerciseChart } from './components/ExerciseChart';
 // Recharts needs to be imported, but since we don't have a package manager,
@@ -56,6 +56,14 @@ export default function App() {
     const [isChartModalOpen, setIsChartModalOpen] = useState(false);
     const [chartExercise, setChartExercise] = useState<Exercise | null>(null);
     
+    // --- Drag & Drop State ---
+    const [draggedItem, setDraggedItem] = useState<{ list: 'routineEditor' | 'workout', index: number } | null>(null);
+    const [draggedOverItem, setDraggedOverItem] = useState<{ list: 'routineEditor' | 'workout', index: number } | null>(null);
+    
+    // --- Import/Export ---
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+
     // --- Timer Logic ---
     const timerAudioRef = useRef<HTMLAudioElement | null>(null);
     useEffect(() => {
@@ -80,28 +88,23 @@ export default function App() {
     // --- Data Calculation ---
     const personalRecords = useMemo(() => {
         const records = new Map<string, { weight: number; reps: number }>();
-        if (!activeWorkout) return records;
+        const history = activeWorkout ? workoutHistory.concat([activeWorkout]) : workoutHistory;
 
-        activeWorkout.entries.forEach(entry => {
-            let pr = { weight: 0, reps: 0 };
-            workoutHistory
-                .filter(session => session.ended)
-                .forEach(session => {
-                    const historyEntry = session.entries.find(e => e.exerciseId === entry.exerciseId);
-                    if (historyEntry) {
-                        historyEntry.sets
-                            .filter(s => s.completed)
-                            .forEach(set => {
-                                if (set.weight > pr.weight) {
-                                    pr = { weight: set.weight, reps: set.reps };
-                                }
-                            });
-                    }
+        history
+            .filter(session => session.ended)
+            .forEach(session => {
+                session.entries.forEach(entry => {
+                    let pr = records.get(entry.exerciseId) || { weight: 0, reps: 0 };
+                    entry.sets
+                        .filter(s => s.completed)
+                        .forEach(set => {
+                            if (set.weight > pr.weight) {
+                                pr = { weight: set.weight, reps: set.reps };
+                            }
+                        });
+                    records.set(entry.exerciseId, pr);
                 });
-            if (pr.weight > 0) {
-                records.set(entry.exerciseId, pr);
-            }
-        });
+            });
         return records;
     }, [activeWorkout, workoutHistory]);
 
@@ -266,6 +269,63 @@ export default function App() {
         setIsChartModalOpen(true);
     };
 
+    // --- Import/Export Logic ---
+    const handleExport = () => {
+        try {
+            const data = JSON.stringify({
+                exercises,
+                routines,
+                workoutHistory,
+                restDuration
+            }, null, 2);
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'progress-tracker-backup.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error("Failed to export data:", error);
+            alert("Error exporting data.");
+        }
+    };
+
+    const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const text = e.target?.result;
+                if (typeof text !== 'string') throw new Error("File could not be read");
+                const data = JSON.parse(text);
+
+                if (Array.isArray(data.exercises) && Array.isArray(data.routines) && Array.isArray(data.workoutHistory) && typeof data.restDuration === 'number') {
+                    setExercises(data.exercises);
+                    setRoutines(data.routines);
+                    setWorkoutHistory(data.workoutHistory);
+                    setRestDuration(data.restDuration);
+                    alert('Data imported successfully!');
+                    setIsSettingsModalOpen(false);
+                } else {
+                    throw new Error("Invalid or corrupted data file.");
+                }
+            } catch (error) {
+                console.error("Failed to import data:", error);
+                alert(`Error importing data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+        };
+        reader.onerror = () => {
+            alert('Failed to read the file.');
+        };
+        reader.readAsText(file);
+        event.target.value = ''; // Allow re-importing the same file
+    };
+
     // --- Render Logic ---
 
     const renderRoutines = () => (
@@ -322,6 +382,13 @@ export default function App() {
             setEditingRoutine({ ...editingRoutine, exerciseIds: editingRoutine.exerciseIds.filter(id => id !== exerciseId) });
         };
         
+        const handleRoutineExerciseReorder = (dragIndex: number, dropIndex: number) => {
+            const reorderedIds = [...editingRoutine.exerciseIds];
+            const [movedItem] = reorderedIds.splice(dragIndex, 1);
+            reorderedIds.splice(dropIndex, 0, movedItem);
+            setEditingRoutine({ ...editingRoutine, exerciseIds: reorderedIds });
+        };
+
         return (
             <>
                 <Header title={editingRoutine.id ? 'Edit Routine' : 'New Routine'} onBack={() => setCurrentView('routines')}>
@@ -331,11 +398,29 @@ export default function App() {
                     <input type="text" value={editingRoutine.name} onChange={onNameChange} placeholder="Routine Name" className="w-full bg-secondary p-3 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-primary"/>
                     <h3 className="text-lg font-semibold mt-4">Exercises</h3>
                      <div className="space-y-2">
-                        {editingRoutine.exerciseIds.map(id => {
+                        {editingRoutine.exerciseIds.map((id, index) => {
                             const exercise = exercises.find(e => e.id === id);
+                            const isDraggedOver = draggedOverItem?.list === 'routineEditor' && draggedOverItem.index === index;
                             return (
-                                <div key={id} className="bg-surface p-3 rounded-lg flex justify-between items-center">
-                                    <span>{exercise?.name || 'Unknown Exercise'}</span>
+                                <div 
+                                    key={id} 
+                                    className={`bg-surface p-3 rounded-lg flex justify-between items-center transition-all ${draggedItem?.list === 'routineEditor' && draggedItem.index === index ? 'opacity-30' : ''} ${isDraggedOver ? 'ring-2 ring-primary' : ''}`}
+                                    draggable
+                                    onDragStart={() => setDraggedItem({ list: 'routineEditor', index })}
+                                    onDragEnter={() => setDraggedOverItem({ list: 'routineEditor', index })}
+                                    onDragEnd={() => { setDraggedItem(null); setDraggedOverItem(null); }}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={() => {
+                                        if (draggedItem && draggedItem.list === 'routineEditor') {
+                                            handleRoutineExerciseReorder(draggedItem.index, index);
+                                        }
+                                        setDraggedOverItem(null);
+                                    }}
+                                >
+                                    <div className="flex items-center">
+                                        <EllipsisVerticalIcon className="w-5 h-5 text-text-secondary cursor-grab mr-2"/>
+                                        <span>{exercise?.name || 'Unknown Exercise'}</span>
+                                    </div>
                                     <button onClick={() => onRemoveExercise(id)}><TrashIcon className="w-5 h-5 text-danger"/></button>
                                 </div>
                             );
@@ -376,12 +461,17 @@ export default function App() {
         const activeRoutine = routines.find(r => r.id === activeWorkout.routineId);
         const workoutTitle = activeRoutine?.name || (activeWorkout.routineId === null ? 'Blank Workout' : 'Workout');
         
-        const lastSessionForRoutine = activeWorkout.routineId
-            ? workoutHistory.find(session =>
-                session.ended && session.routineId === activeWorkout.routineId
-              )
-            : null;
+        const lastSessionForRoutine = workoutHistory.find(session =>
+            session.ended && session.routineId === activeWorkout.routineId
+          );
 
+        const handleWorkoutExerciseReorder = (dragIndex: number, dropIndex: number) => {
+            const reorderedEntries = [...activeWorkout.entries];
+            const [movedItem] = reorderedEntries.splice(dragIndex, 1);
+            reorderedEntries.splice(dropIndex, 0, movedItem);
+            updateActiveWorkout({ ...activeWorkout, entries: reorderedEntries });
+        };
+        
         return (
             <div className="flex flex-col h-screen">
                 <Header title={workoutTitle} onBack={() => setCurrentView('routines')}>
@@ -404,11 +494,29 @@ export default function App() {
                             lastEntry => lastEntry.exerciseId === entry.exerciseId
                         );
                         const pr = personalRecords.get(entry.exerciseId);
+                        const isDraggedOver = draggedOverItem?.list === 'workout' && draggedOverItem.index === entryIndex;
 
                         return (
-                            <div key={entry.id} className="bg-surface p-4 rounded-lg">
+                            <div 
+                                key={entry.id} 
+                                className={`bg-surface p-4 rounded-lg transition-all ${draggedItem?.list === 'workout' && draggedItem.index === entryIndex ? 'opacity-30' : ''} ${isDraggedOver ? 'ring-2 ring-primary' : ''}`}
+                                draggable
+                                onDragStart={() => setDraggedItem({ list: 'workout', index: entryIndex })}
+                                onDragEnter={() => setDraggedOverItem({ list: 'workout', index: entryIndex })}
+                                onDragEnd={() => { setDraggedItem(null); setDraggedOverItem(null); }}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => {
+                                    if (draggedItem && draggedItem.list === 'workout') {
+                                        handleWorkoutExerciseReorder(draggedItem.index, entryIndex);
+                                    }
+                                    setDraggedOverItem(null);
+                                }}
+                            >
                                 <div className="flex justify-between items-center mb-3">
-                                    <h3 className="text-xl font-bold">{exercise?.name}</h3>
+                                    <div className="flex items-center">
+                                        <EllipsisVerticalIcon className="w-5 h-5 text-text-secondary cursor-grab mr-2"/>
+                                        <h3 className="text-xl font-bold">{exercise?.name}</h3>
+                                    </div>
                                     {exercise && (
                                         <button onClick={() => showChart(exercise)} className="p-2 rounded-full hover:bg-secondary text-primary">
                                             <ChartBarIcon />
@@ -444,8 +552,8 @@ export default function App() {
                                             <div className="col-span-3 text-left text-xs text-text-secondary pl-1">
                                                 {pr ? `${pr.weight}kg x ${pr.reps}` : 'n/a'}
                                             </div>
-                                            <div className="col-span-3"><input type="number" value={set.weight} onChange={e => updateSet(entryIndex, setIndex, { weight: parseFloat(e.target.value) || 0 })} className="w-full text-center bg-secondary p-2 rounded-lg"/></div>
-                                            <div className="col-span-3"><input type="number" value={set.reps} onChange={e => updateSet(entryIndex, setIndex, { reps: parseInt(e.target.value) || 0 })} className="w-full text-center bg-secondary p-2 rounded-lg"/></div>
+                                            <div className="col-span-3"><input type="number" value={set.weight} onChange={e => updateSet(entryIndex, setIndex, { weight: parseFloat(e.target.value) || 0 })} onFocus={e => e.target.select()} className="w-full text-center bg-secondary p-2 rounded-lg"/></div>
+                                            <div className="col-span-3"><input type="number" value={set.reps} onChange={e => updateSet(entryIndex, setIndex, { reps: parseInt(e.target.value) || 0 })} onFocus={e => e.target.select()} className="w-full text-center bg-secondary p-2 rounded-lg"/></div>
                                             <div className="col-span-2 flex justify-center">
                                                 <button onClick={() => updateSet(entryIndex, setIndex, { completed: !set.completed })} className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${set.completed ? 'bg-success text-white' : 'border-2 border-gray-500'}`}>
                                                     {set.completed && <CheckIcon />}
@@ -571,7 +679,7 @@ export default function App() {
                 {chartExercise && <ExerciseChart exercise={chartExercise} history={workoutHistory} />}
             </Modal>
              <Modal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} title="Settings">
-                <div className="space-y-4">
+                <div className="space-y-6">
                     <div>
                         <label htmlFor="restDuration" className="block text-sm font-medium text-text-secondary">Rest Timer Duration (seconds)</label>
                         <input
@@ -581,6 +689,16 @@ export default function App() {
                             onChange={e => setRestDuration(parseInt(e.target.value) || 60)}
                             className="mt-1 w-full bg-secondary p-2 rounded-lg border border-gray-600 focus:outline-none focus:ring-2 focus:ring-primary"
                         />
+                    </div>
+                    <div className="space-y-3">
+                        <h3 className="text-lg font-semibold">Data Management</h3>
+                         <button onClick={handleExport} className="w-full bg-primary hover:bg-primary-hover text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                            Export Data
+                        </button>
+                        <button onClick={() => fileInputRef.current?.click()} className="w-full bg-secondary hover:bg-secondary-hover text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                            Import Data
+                        </button>
+                        <input type="file" ref={fileInputRef} onChange={handleImport} accept=".json" className="hidden" />
                     </div>
                 </div>
              </Modal>

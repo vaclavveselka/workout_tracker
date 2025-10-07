@@ -1,5 +1,5 @@
 {
-  "name": "Copy of Progress Tracker",
+  "name": "Progress Tracker",
   "description": "A web application for logging and analyzing strength training workouts, inspired by the 'Strong' app. Track your exercises, create routines, log workouts, and visualize your progress with interactive charts.",
   "requestFramePermissions": []
 }
