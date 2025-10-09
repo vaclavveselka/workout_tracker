@@ -1,7 +1,10 @@
 
+export type BodyPart = 'chest' | 'back' | 'legs' | 'arms' | 'shoulders' | 'belly' | 'other';
+
 export interface Exercise {
   id: string;
   name: string;
+  bodyPart: BodyPart;
 }
 
 export interface Routine {

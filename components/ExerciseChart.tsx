@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { WorkoutSession, ChartMetric, ChartDataPoint, Exercise } from '../types';
@@ -34,14 +33,40 @@ interface ExerciseChartProps {
   history: WorkoutSession[];
 }
 
+const SET_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
 export const ExerciseChart: React.FC<ExerciseChartProps> = ({ exercise, history }) => {
   const [metric, setMetric] = useState<ChartMetric>('weight');
+  const [visibleSet, setVisibleSet] = useState<'all' | number>('all');
 
   const data = useMemo(() => processHistory(exercise.id, history), [exercise.id, history]);
+  
+  const groupedData = useMemo(() => {
+    const groups: { [key: number]: ChartDataPoint[] } = {};
+    data.forEach(point => {
+        if (!groups[point.setNumber]) {
+            groups[point.setNumber] = [];
+        }
+        groups[point.setNumber].push(point);
+    });
+    return groups;
+  }, [data]);
+  
+  const availableSets = useMemo(() => {
+    return Array.from(new Set(data.map(d => d.setNumber))).sort((a, b) => a - b);
+  }, [data]);
+
+  const filteredGroupedData = useMemo(() => {
+    if (visibleSet === 'all') {
+        return groupedData;
+    }
+    return { [visibleSet]: groupedData[visibleSet] || [] };
+  }, [groupedData, visibleSet]);
+
 
   const metricConfig = {
-    weight: { name: 'Weight (kg)', color: '#3b82f6' },
-    reps: { name: 'Reps', color: '#10b981' },
+    weight: { name: 'Weight (kg)' },
+    reps: { name: 'Reps' },
   };
   
   if (data.length < 1) {
@@ -69,6 +94,27 @@ export const ExerciseChart: React.FC<ExerciseChartProps> = ({ exercise, history 
           </button>
         ))}
       </div>
+       <div className="flex justify-center flex-wrap gap-2 mb-4">
+        <button
+            onClick={() => setVisibleSet('all')}
+            className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                visibleSet === 'all' ? 'bg-primary text-white' : 'bg-secondary hover:bg-secondary-hover'
+            }`}
+        >
+            All Sets
+        </button>
+        {availableSets.map(setNum => (
+            <button
+                key={setNum}
+                onClick={() => setVisibleSet(setNum)}
+                className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                    visibleSet === setNum ? 'bg-primary text-white' : 'bg-secondary hover:bg-secondary-hover'
+                }`}
+            >
+                Set {setNum}
+            </button>
+        ))}
+    </div>
       <div style={{ width: '100%', height: 300 }}>
         <ResponsiveContainer>
           <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
@@ -102,13 +148,21 @@ export const ExerciseChart: React.FC<ExerciseChartProps> = ({ exercise, history 
                 formatter={(value, name, props) => {
                     const { payload } = props;
                     if (payload) {
-                        return `${payload.weight} kg x ${payload.reps} reps (Set ${payload.setNumber})`;
+                        return `${payload.weight} kg x ${payload.reps} reps`;
                     }
                     return value;
                 }}
                 labelFormatter={(label) => `Date: ${new Date(label).toLocaleDateString()}`}
             />
-            <Scatter name="Sets" data={data} fill={metricConfig[metric].color} />
+            <Legend verticalAlign="bottom" height={36} iconSize={10} />
+            {Object.entries(filteredGroupedData).map(([setNumber, setData]) => (
+                <Scatter
+                    key={setNumber}
+                    name={`Set ${setNumber}`}
+                    data={setData}
+                    fill={SET_COLORS[(parseInt(setNumber) - 1) % SET_COLORS.length]}
+                />
+            ))}
           </ScatterChart>
         </ResponsiveContainer>
       </div>
